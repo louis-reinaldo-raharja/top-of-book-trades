@@ -3,6 +3,19 @@ import json
 from datetime import datetime
 from binance import AsyncClient, BinanceSocketManager
 from kafka import KafkaProducer
+from kafka.errors import NoBrokersAvailable
+import time
+
+async def create_kafka_producer(max_retries=5, retry_interval=5):
+    for attempt in range(max_retries):
+        try:
+            return KafkaProducer(bootstrap_servers=['kafka:9092'])
+        except NoBrokersAvailable:
+            if attempt < max_retries - 1:
+                print(f"Failed to connect to Kafka. Retrying in {retry_interval} seconds...")
+                await asyncio.sleep(retry_interval)
+            else:
+                raise
 
 async def main():
     # Initialize Binance client
@@ -10,7 +23,7 @@ async def main():
     bm = BinanceSocketManager(client)
 
     # Initialize Kafka producer
-    producer = KafkaProducer(bootstrap_servers=['kafka:9092'])
+    producer = await create_kafka_producer()
 
     async with bm.multiplex_socket(['btcusdt@bookTicker']) as stream:
         while True:

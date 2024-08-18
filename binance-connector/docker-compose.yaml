@@ -1,11 +1,10 @@
 version: '3'
 services:
   zookeeper:
-    image: confluentinc/cp-zookeeper:latest
+    image: zookeeper:3.5
     platform: linux/arm64
-    environment:
-      ZOOKEEPER_CLIENT_PORT: 2181
-      ZOOKEEPER_TICK_TIME: 2000
+    ports:
+      - "2181:2181"
 
   kafka:
     image: confluentinc/cp-kafka:latest
@@ -21,24 +20,101 @@ services:
       KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
       KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
       KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
-  
-  binance-connect:
-    build: .
-    platform: linux/arm64
+    healthcheck:
+      test: ["CMD", "kafka-topics", "--list", "--bootstrap-server", "localhost:9092"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+
+  pinot-controller:
+    image: apachepinot/pinot:latest
+    command: StartController -zkAddress zookeeper:2181
+    ports:
+      - "9000:9000"
     depends_on:
-      - kafka
-    command: ["python", "binance_connect.py"]
+      - zookeeper
+    environment:
+      - JAVA_OPTS=-Xmx1G -Xms1G -XX:ActiveProcessorCount=2
+      - PINOT_ROOT_DIR=/tmp/pinot-controller
+    volumes:
+      - ./pinot-config:/config
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+
+  pinot-broker:
+    image: apachepinot/pinot:latest
+    command: StartBroker -zkAddress zookeeper:2181
+    ports:
+      - "8099:8099"
+    depends_on:
+      - pinot-controller
+    environment:
+      - JAVA_OPTS=-Xmx1G -Xms1G -XX:ActiveProcessorCount=2
+
+  pinot-server:
+    image: apachepinot/pinot:latest
+    command: StartServer -zkAddress zookeeper:2181
+    ports:
+      - "8098:8098"
+    depends_on:
+      - pinot-broker
+    environment:
+      - JAVA_OPTS=-Xmx1G -Xms1G -XX:ActiveProcessorCount=2
+
+  binance-connect:
+      build: .
+      platform: linux/arm64
+      depends_on:
+        kafka:
+          condition: service_healthy
+      command: ["python", "binance_connect.py"]
+      environment:
+        - KAFKA_BROKER=kafka:9092
+  
+  pinot-setup:
+    image: curlimages/curl:7.81.0
+    depends_on:
+      pinot-controller:
+        condition: service_healthy
+    volumes:
+      - ./pinot-config:/config
+    command: >
+      sh -c "
+        echo 'Waiting for Pinot controller to be ready...' &&
+        until curl -s http://pinot-controller:9000/health > /dev/null; do
+          echo 'Pinot controller is unavailable - sleeping'
+          sleep 1
+        done &&
+        echo 'Checking if schema exists...' &&
+        if ! curl -s 'http://pinot-controller:9000/schemas/binance_data' | grep -q 'binance_data'; then
+          echo 'Schema does not exist. Creating schema...' &&
+          curl -X POST 'http://pinot-controller:9000/schemas' -H 'Content-Type: application/json' -d @/config/schema.json
+        else
+          echo 'Schema already exists. Skipping creation.'
+        fi &&
+        echo 'Checking if table exists...' &&
+        if ! curl -s 'http://pinot-controller:9000/tables/binance_data' | grep -q 'binance_data'; then
+          echo 'Table does not exist. Creating table...' &&
+          curl -X POST 'http://pinot-controller:9000/tables' -H 'Content-Type: application/json' -d @/config/table-config.json
+        else
+          echo 'Table already exists. Skipping creation.'
+        fi
+      "
+
 
   quix-consumer:
     build: .
     platform: linux/arm64
     depends_on:
-      - kafka
+      kafka:
+        condition: service_healthy
+      pinot-controller:
+        condition: service_healthy
     command: ["python", "quix_consumer.py"]
     environment:
       - KAFKA_BROKER=kafka:9092
-
-
-
-
 

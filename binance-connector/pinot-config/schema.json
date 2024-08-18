@@ -1,0 +1,18 @@
+{
+  "schemaName": "binance_data",
+  "dimensionFieldSpecs": [
+    {"name": "symbol", "dataType": "STRING"}
+  ],
+  "metricFieldSpecs": [
+    {"name": "bid_price", "dataType": "DOUBLE"},
+    {"name": "ask_price", "dataType": "DOUBLE"},
+    {"name": "spread", "dataType": "DOUBLE"},
+    {"name": "spread_percentage", "dataType": "DOUBLE"}
+  ],
+  "dateTimeFieldSpecs": [{
+    "name": "time",
+    "dataType": "TIMESTAMP",
+    "format": "1:MILLISECONDS:EPOCH",
+    "granularity": "1:MILLISECONDS"
+  }]
+}
